@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"docker-pull/registry"
+	"dp/registry"
 	"fmt"
 	"github.com/spf13/cobra"
 	"log"
@@ -32,7 +32,7 @@ dp pull mcr.microsoft.com/windows/nanoserver@sha256:ae443bd9609b9ef06d21d6caab59
 dp pull -o project.tar.gz nginx:alpine nginx:1.17.5-alpine-perl
 
 # pull from different registry 
-dp pull -o project.tar.gz nginx:alpine gcr.azk8s.cn/google_containers/pause-amd64:3.1
+dp pull -o project.tar.gz nginx:alpine gcr.io/google_containers/pause-amd64:3.1
 `,
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
@@ -41,7 +41,7 @@ dp pull -o project.tar.gz nginx:alpine gcr.azk8s.cn/google_containers/pause-amd6
 		}
 		if len(args) == 1 && saveName == "" {
 			saveName = strings.ReplaceAll(args[0], "/", "_")
-			saveName = fmt.Sprintf("%s.tar.gz", strings.Replace(args[0], ":", "@", 1))
+			saveName = fmt.Sprintf("%s.tar.gz", strings.Replace(saveName, ":", "@", 1))
 		}
 		// todo regex check
 		//for _, name := range args {

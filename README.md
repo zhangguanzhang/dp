@@ -34,10 +34,13 @@ Flags:
   -h, --help              help for pull
   -o, --out-file string   the name will write to
 ```
+## attention
+
+Many of the images on quay.io are still scheme1.manifest, and some of the mirror images of some other domain names are long ago. These images will not be successfully pulled.
 
 ## todo
 
-- support quay.io and harbor
 - could retry while failed
 - multi process download
 - with a nice download progress bar
+- support quay.io and harbor(hard for quay.io!!)

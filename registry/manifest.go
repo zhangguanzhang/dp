@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/docker/distribution/manifest/schema2"
 	"github.com/opencontainers/go-digest"
@@ -25,7 +26,6 @@ const  (
 	REPO = "library"
 	DefaultTAG = "latest"
 	REGISTRY =  "registry-1.docker.io"
-	V2JSON = "application/vnd.docker.distribution.manifest.v2+json"
 	//github.com/docker/docker/image/tarexport
 	ManifestFileName           = "manifest.json"
 	LegacyLayerFileName        = "layer.tar"
@@ -49,6 +49,8 @@ type Pull struct {
 	Client *http.Client
 	//
 	ImgParts []string
+
+	ImgNameWithoutTag string
 }
 
 // for manifest.json file
@@ -59,30 +61,43 @@ type ManifestItem struct {
 }
 
 func NewPull(pullImg string) *Pull {
-	p := &Pull{Tag: DefaultTAG}
+	p := &Pull{
+		Tag: DefaultTAG,
+		ImgParts: strings.Split(pullImg, "/"),
+	}
 	repo := REPO
 	tempStrSlice := make([]string, 0)
-	imgParts := strings.Split(pullImg, "/")
-	if strings.Contains(imgParts[len(imgParts)-1], "@") {
-		tempStrSlice = strings.Split(imgParts[len(imgParts)-1], "@")
-	} else if strings.Contains(imgParts[len(imgParts)-1], ":"){
-		tempStrSlice = strings.Split(imgParts[len(imgParts)-1], ":")
+
+	if strings.Contains(p.ImgParts[len(p.ImgParts)-1], "@") {
+		p.ImgNameWithoutTag = strings.SplitN(pullImg, "@", 2)[1]
+		tempStrSlice = strings.Split(p.ImgParts[len(p.ImgParts)-1], "@")
+	} else if strings.Contains(p.ImgParts[len(p.ImgParts)-1], ":"){
+		p.ImgNameWithoutTag = strings.SplitN(pullImg, ":", 2)[1]
+		tempStrSlice = strings.Split(p.ImgParts[len(p.ImgParts)-1], ":")
 	} else {
-		tempStrSlice = []string{imgParts[len(imgParts)-1], DefaultTAG}
+		tempStrSlice = []string{p.ImgParts[len(p.ImgParts)-1], DefaultTAG}
 	}
 	img := tempStrSlice[0]
 	p.Tag = tempStrSlice[1]
 
 	//`:` means the port, the first part has `.` means the domain name or ip
-	if len(imgParts) > 1 &&
-		( strings.Contains(imgParts[0], ".") || strings.Contains(imgParts[0], ":") ) {
+	if len(p.ImgParts) > 1 &&
+		( strings.Contains(p.ImgParts[0], ".") || strings.Contains(p.ImgParts[0], ":") ) {
 		// use domain
-		p.Registry = imgParts[0]
-		repo = strings.Join(imgParts[1:len(imgParts) - 1], "/")
+		switch p.ImgParts[0] {
+		case "quay.io":
+			p.Registry = "quay.azk8s.cn"
+		case "gcr.io":
+			p.Registry = "gcr.azk8s.cn"
+		default:
+			p.Registry = p.ImgParts[0]
+		}
+		p.Registry = p.ImgParts[0]
+		repo = strings.Join(p.ImgParts[1:len(p.ImgParts) - 1], "/")
 	} else {// dockerhub
 		p.Registry = REGISTRY
-		if len(imgParts[:len(imgParts)-1]) != 0 {
-			repo = strings.Join(imgParts[:len(imgParts)-1], "/")
+		if len(p.ImgParts[:len(p.ImgParts)-1]) != 0 {
+			repo = strings.Join(p.ImgParts[:len(p.ImgParts)-1], "/")
 		}
 	}
 	p.Repository = fmt.Sprintf("%s/%s", repo, img)
@@ -116,7 +131,7 @@ func (p *Pull) Do(req *http.Request) (*http.Response, error) {
 func (p *Pull) Manifests() (*schema2.Manifest, error) {
 	req, _ := http.NewRequest("GET",
 		fmt.Sprintf("https://%s/v2/%s/manifests/%s", p.Registry, p.Repository, p.Tag), nil)
-	req.Header.Set("Accept", V2JSON)
+	req.Header.Set("Accept", schema2.MediaTypeManifest)
 	resp, err := p.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("while request manifests|%s", err)
@@ -124,10 +139,17 @@ func (p *Pull) Manifests() (*schema2.Manifest, error) {
 	defer resp.Body.Close()
 
 	respBody,_ := ioutil.ReadAll(resp.Body)
-
+	if strings.Contains(string(respBody), `"errors"`) {
+		return nil, errors.New(string(respBody))
+	}
 	var data schema2.Manifest
 	if err := json.Unmarshal(respBody, &data); err != nil {
 		return nil, fmt.Errorf("unmarshal err|%s", err)
+	}
+	if data.SchemaVersion != 2 {
+		return nil, fmt.Errorf(
+			"is not a schema2.Manifest for %s, maybe is quay.io's old images for https://github.com/moby/buildkit/issues/409",
+			strings.Join(p.ImgParts, "/"))
 	}
 	return &data, nil
 }
@@ -136,7 +158,7 @@ func (p *Pull) Manifests() (*schema2.Manifest, error) {
 func (p *Pull) Blobs(Digest digest.Digest) (int64, io.ReadCloser, error) {
 	req, _ := http.NewRequest("GET",
 		fmt.Sprintf("https://%s/v2/%s/blobs/%s", p.Registry, p.Repository, Digest.String()), nil)
-	req.Header.Set("Accept", V2JSON)
+	req.Header.Set("Accept", schema2.MediaTypeManifest)
 	resp, err := p.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("while request blobs|%s", err)
@@ -168,7 +190,6 @@ func Save(names []string, fileName string) (error) {
 		repositoriesJson = make(map[string]map[string]string, 1)
 	)
 
-
 	for _, name := range names {
 		parentID := ""
 		p := NewPull(name)
@@ -179,7 +200,7 @@ func Save(names []string, fileName string) (error) {
 
 		fSize, confRespsBody, err := p.Blobs(data.Config.Digest)
 		if err != nil {
-			return err
+			return fmt.Errorf("while the config digest to get conf %s", err)
 		}
 		// for id.json file
 		confResps, err := ioutil.ReadAll(confRespsBody)
@@ -195,13 +216,13 @@ func Save(names []string, fileName string) (error) {
 		var confCont ImageConfig
 		err = json.Unmarshal(confResps, &confCont)
 		if err != nil {
-			return err
+			return fmt.Errorf("%s for confCont", err)
 		}
 
 		for i, layer := range data.Layers {
 			_, respBody, err := p.Blobs(layer.Digest)
 			if err != nil {
-				return err
+				return fmt.Errorf("while get blobSum %s", err)
 			}
 
 			// https://github.com/moby/moby/blob/master/image/tarexport/save.go#L294-L329
@@ -217,7 +238,7 @@ func Save(names []string, fileName string) (error) {
 
 			// for VERSION
 			if err := tarAddfile(int64(len([]byte(`1.0`))),
-					filepath.Join(legacyLayerDir, LegacyVersionFileName), []byte(`1.0`));err != nil {
+				filepath.Join(legacyLayerDir, LegacyVersionFileName), []byte(`1.0`));err != nil {
 				return err
 			}
 
@@ -245,7 +266,7 @@ func Save(names []string, fileName string) (error) {
 		if v, ok := repositoriesJson[p.Repository]; ok {
 			v[p.Tag] = data.Layers[len(data.Layers)-1].Digest.Hex()
 		} else {
-			repositoriesJson[p.Repository] = map[string]string{
+			repositoriesJson[p.ImgNameWithoutTag] = map[string]string{
 				p.Tag: data.Layers[len(data.Layers)-1].Digest.Hex(),
 			}
 		}
@@ -303,7 +324,7 @@ func TarAddfileWithDownBar(tw *tar.Writer, wb WriteBarFunc) TarAddfileFunc {
 		default:
 			return fmt.Errorf("invalid type")
 		}
-		
+
 		for {
 			numRead, readErr := data.Read(buf)
 			if numRead > 0 {
