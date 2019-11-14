@@ -1,7 +1,7 @@
 package main
 
 import (
-	"docker-pull/cmd"
+	"dp/cmd"
 )
 
 
@@ -10,3 +10,4 @@ func main() {
 	cmd.Execute()
 
 }
+

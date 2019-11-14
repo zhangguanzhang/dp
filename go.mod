@@ -8,4 +8,3 @@ require (
 	github.com/opencontainers/image-spec v1.0.1 // indirect
 	github.com/spf13/cobra v0.0.5
 )
-
