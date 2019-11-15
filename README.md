@@ -3,6 +3,20 @@
 <a href="https://asciinema.org/a/QYGxvq2ef43pnhO5HZo2KcHBk?autoplay=1&speed=2"><img src="https://asciinema.org/a/QYGxvq2ef43pnhO5HZo2KcHBk.png" width="836"/></a>
 
 ## Usage
+
+### check
+
+Check if the images belongs to scheme2.Manifest
+```
+$ dp c dduportal/bats:0.4.0
+scheme2.Manifest: []
+scheme1.Manifest: [dduportal/bats:0.4.0]
+$ dp c dduportal/bats:0.4.0 nginx:alpine --only
+scheme2.Manifest: [nginx:alpine]
+```
+
+### pull
+
 Pull the docker images on a machine without docker, and support pulling images from multiple registry at same time
 ```
 $ dp pull

@@ -18,7 +18,10 @@ var checkCmd = &cobra.Command{
 	Example: `
 dp c gcr.io/google_containers/bustbox
 
+dp c --only nginx:alpine
+
 dp check nginx:alpine gcr.io/google_containers/pause-amd64:3.1
+
 `,
 	Run: func(cmd *cobra.Command, args []string) {
 		if len(args) == 0 {
