@@ -14,7 +14,7 @@ var (
 	//strict bool
 	saveName string
 )
-var cpCmd = &cobra.Command{
+var pullCmd = &cobra.Command{
 	Use:     "pull",
 	Aliases: []string{"p"},
 	Short:   "pull images",
@@ -60,8 +60,8 @@ dp pull -o project.tar.gz nginx:alpine gcr.io/google_containers/pause-amd64:3.1
 }
 
 func init() {
-	rootCmd.AddCommand(cpCmd)
+	rootCmd.AddCommand(pullCmd)
 	//cpCmd.Flags().BoolVarP(&strict, "strict-mode", "s", false,
 	//	"The image name of the pull is strictly checked. If it is wrong, it will not be pulled.")
-	cpCmd.Flags().StringVarP(&saveName, "out-file", "o", "", "the name will write to,default use timeformat")
+	pullCmd.Flags().StringVarP(&saveName, "out-file", "o", "", "the name will write to,default use timeformat")
 }
