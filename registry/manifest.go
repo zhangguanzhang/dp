@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
-
 	"strings"
 )
 
@@ -36,7 +35,7 @@ const  (
 
 type WriteBarFunc func(downloadName string, length, downLen int64)
 
-type TarAddfileFunc func(size int64, name string, b interface{}) error
+type TarAddfileFunc func(size int64, name string, b interface{}, totalWrite ...int64) (int64, error)
 
 type Pull struct {
 	// like registry-1.docker.io
@@ -95,7 +94,8 @@ func NewPull(pullImg string) *Pull {
 		p.Registry = p.ImgParts[0]
 		repo = strings.Join(p.ImgParts[1:len(p.ImgParts) - 1], "/")
 	} else {// dockerhub
-		p.Registry = REGISTRY
+		//p.Registry = REGISTRY
+		p.Registry = "dockerhub.azk8s.cn"
 		if len(p.ImgParts[:len(p.ImgParts)-1]) != 0 {
 			repo = strings.Join(p.ImgParts[:len(p.ImgParts)-1], "/")
 		}
@@ -155,10 +155,11 @@ func (p *Pull) Manifests() (*schema2.Manifest, error) {
 }
 
 
-func (p *Pull) Blobs(Digest digest.Digest) (int64, io.ReadCloser, error) {
+func (p *Pull) Blobs(Digest digest.Digest, Range int64) (int64, io.ReadCloser, error) {
 	req, _ := http.NewRequest("GET",
 		fmt.Sprintf("https://%s/v2/%s/blobs/%s", p.Registry, p.Repository, Digest.String()), nil)
 	req.Header.Set("Accept", schema2.MediaTypeManifest)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", Range))
 	resp, err := p.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("while request blobs|%s", err)
@@ -198,14 +199,14 @@ func Save(names []string, fileName string) (error) {
 			return err
 		}
 
-		fSize, confRespsBody, err := p.Blobs(data.Config.Digest)
+		fSize, confRespsBody, err := p.Blobs(data.Config.Digest, 0)
 		if err != nil {
 			return fmt.Errorf("while the config digest to get conf %s", err)
 		}
 		// for id.json file
 		confResps, err := ioutil.ReadAll(confRespsBody)
 		defer confRespsBody.Close()
-		if err := tarAddfile(fSize, data.Config.Digest.Hex() + ".json", confResps);err != nil {
+		if _, err := tarAddfile(fSize, data.Config.Digest.Hex() + ".json", confResps);err != nil {
 			return err
 		}
 		manifestJson := ManifestItem{
@@ -220,24 +221,38 @@ func Save(names []string, fileName string) (error) {
 		}
 
 		for i, layer := range data.Layers {
-			_, respBody, err := p.Blobs(layer.Digest)
-			if err != nil {
-				return fmt.Errorf("while get blobSum %s", err)
-			}
 
 			// https://github.com/moby/moby/blob/master/image/tarexport/save.go#L294-L329
 			// https://gist.github.com/aaronlehmann/b42a2eaf633fc949f93b#id-definitions-and-calculations
 			legacyLayerDir := fmt.Sprintf("%x",
 				sha256.Sum256([]byte(fmt.Sprintf(parentID + "\n" + layer.Digest.String() + "\n"))))
 
-			// for layer.tar
-			if err := tarAddfile(layer.Size, filepath.Join(legacyLayerDir, LegacyLayerFileName), respBody);err != nil {
+			// for layer.tar gzip header
+			if _, err := tarAddfile(layer.Size, filepath.Join(legacyLayerDir, LegacyLayerFileName), nil);err != nil {
 				return err
 			}
+			var (
+				written int64 = 0
+			)
+			for {
+				_, respBody, err := p.Blobs(layer.Digest, written)
+				if err != nil {
+					return fmt.Errorf("while get blobSum %s", err)
+				}
+				// for layer.tar
+				written, err = tarAddfile(layer.Size, filepath.Join(legacyLayerDir, LegacyLayerFileName), respBody, written)
+				if err != nil {
+					return err
+				}
+				if written >= layer.Size {
+					break
+				}
+			}
+
 			manifestJson.Layers = append(manifestJson.Layers, filepath.Join(legacyLayerDir, LegacyLayerFileName))
 
 			// for VERSION
-			if err := tarAddfile(int64(len([]byte(`1.0`))),
+			if _, err := tarAddfile(int64(len([]byte(`1.0`))),
 				filepath.Join(legacyLayerDir, LegacyVersionFileName), []byte(`1.0`));err != nil {
 				return err
 			}
@@ -254,9 +269,8 @@ func Save(names []string, fileName string) (error) {
 				confBytesFull, _:= json.Marshal(&confCont)
 				confBytes = confBytesFull
 			}
-
 			// for json
-			if err := tarAddfile(int64(len(confBytes)),
+			if _, err := tarAddfile(int64(len(confBytes)),
 				filepath.Join(legacyLayerDir, LegacyConfigFileName), confBytes);err != nil {
 				return err
 			}
@@ -277,7 +291,7 @@ func Save(names []string, fileName string) (error) {
 	if err != nil {
 		return fmt.Errorf("while Marshal manifestJsons|%s", err)
 	}
-	if err := tarAddfile(int64(len(manifestBytes)), ManifestFileName, manifestBytes);err != nil {
+	if _, err := tarAddfile(int64(len(manifestBytes)), ManifestFileName, manifestBytes);err != nil {
 		return err
 	}
 
@@ -286,7 +300,7 @@ func Save(names []string, fileName string) (error) {
 	if err != nil {
 		return fmt.Errorf("while Marshal repositoriesBytes|%s", err)
 	}
-	if err := tarAddfile(int64(len(repositoriesBytes)), LegacyRepositoriesFileName, repositoriesBytes);err != nil {
+	if _, err := tarAddfile(int64(len(repositoriesBytes)), LegacyRepositoriesFileName, repositoriesBytes);err != nil {
 		return err
 	}
 
@@ -299,7 +313,10 @@ func WriteBar(downloadName string, length, downLen int64) {
 }
 
 func TarAddfileWithDownBar(tw *tar.Writer, wb WriteBarFunc) TarAddfileFunc {
-	return func(size int64, name string, b interface{}) error {
+	// b != nil ====> will write data
+	// b == nil ====> don't write data
+	// len(totalWrite) == 0 ===> will write header
+	return func(size int64, name string, b interface{}, totalWrite ...int64) (int64, error) {
 		var (
 			buf     = make([]byte, 32*1024)
 			written int64
@@ -307,53 +324,56 @@ func TarAddfileWithDownBar(tw *tar.Writer, wb WriteBarFunc) TarAddfileFunc {
 			data  io.Reader
 		)
 
-		err = tw.WriteHeader(&tar.Header{
-			Mode: 0644,
-			Size: size,
-			Name: name,
-		})
-		if err != nil {
-			return fmt.Errorf("%s write header|%s", name, err)
+		if len(totalWrite) == 0 { // for layer.tar while retry
+			err = tw.WriteHeader(&tar.Header{
+				Mode: 0644,
+				Size: size,
+				Name: name,
+			})
+			if err != nil {
+				return 0, fmt.Errorf("%s write header|%s", name, err)
+			}
 		}
 
-		switch v := b.(type) {
-		case []byte:
-			data = bytes.NewReader(v)
-		case io.ReadCloser:
-			data = v
-		default:
-			return fmt.Errorf("invalid type")
-		}
+		if b != nil {
+			switch v := b.(type) {
+			case []byte:
+				data = bytes.NewReader(v)
+			case io.ReadCloser:
+				data = v
+			default:
+				return 0, fmt.Errorf("invalid type")
+			}
 
-		for {
-			numRead, readErr := data.Read(buf)
-			if numRead > 0 {
-				numWrite, writeErr := tw.Write(buf[0:numRead])
-				if numWrite > 0 {
-					written += int64(numWrite)
+			if len(totalWrite) >= 1 {
+				written = totalWrite[0]
+			}
+
+			for {
+				numRead, readErr := data.Read(buf)
+				if numRead > 0 {
+					numWrite, writeErr := tw.Write(buf[0:numRead])
+					if numWrite > 0 {
+						written += int64(numWrite)
+					}
+					if writeErr != nil {
+						err = io.ErrShortWrite
+						break
+					}
 				}
-				if writeErr != nil {
-					err = io.ErrShortWrite
+				if readErr != nil {
+					if readErr != io.EOF {
+						err = readErr
+					}
 					break
 				}
+				wb(name, size, written)
 			}
-			if readErr != nil {
-				if readErr != io.EOF {
-					err = readErr
-				}
-				break
+			if written >= size {
+				fmt.Println()
 			}
-			wb(name, size, written)
 		}
-		fmt.Println()
-		//_, err = tw.Write(b)
-		//if err != nil {
-		//	return fmt.Errorf("%s write bytes|%s", name, err)
-		//}
-		//if err := tw.Flush();err != nil {
-		//	return err
-		//}
-		return nil
+		return written, nil
 	}
 }
 
