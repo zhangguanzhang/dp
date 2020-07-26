@@ -1,5 +1,7 @@
 ## demo
 
+推荐去使用[skeopeo](https://github.com/containers/skopeo)，此项目已经不维护和造轮子，如果有兴趣可以借鉴下思路，azk8s.cn已经失效，如果借鉴过程可以去掉azk8s的代理
+
 <a href="https://asciinema.org/a/QYGxvq2ef43pnhO5HZo2KcHBk?autoplay=1&speed=2"><img src="https://asciinema.org/a/QYGxvq2ef43pnhO5HZo2KcHBk.png" width="836"/></a>
 
 ## Usage
